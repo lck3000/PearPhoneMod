@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "pearphone:block/audio_player_block"
+    }
+  }
+}

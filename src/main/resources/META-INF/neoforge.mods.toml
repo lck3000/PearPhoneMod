@@ -1,0 +1,28 @@
+modLoader="javafml"
+loaderVersion="[2,)"
+license="MIT"
+issueTrackerURL="https://github.com/lck3000/PearPhoneMod/issues"
+
+[[mods]]
+    modId="pearphone"
+    version="${file.jarVersion}"
+    displayName="PearPhone Mod"
+    displayURL="https://github.com/lck3000/PearPhoneMod"
+    authors="lck3000"
+    description='''
+Adds an audio player block that streams YouTube audio to nearby players with proximity-based sound.
+'''
+
+[[dependencies.pearphone]]
+    modId="neoforge"
+    type="required"
+    versionRange="[21.1,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.pearphone]]
+    modId="minecraft"
+    type="required"
+    versionRange="[1.21.1,1.22)"
+    ordering="NONE"
+    side="BOTH"

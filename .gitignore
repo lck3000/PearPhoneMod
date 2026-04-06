@@ -1,0 +1,30 @@
+# Build output
+build/
+out/
+
+# Gradle
+.gradle/
+gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.eclipse/
+.classpath
+.project
+.settings/
+*.class
+
+# NeoForge / Minecraft dev environment
+run/
+runs/
+src/generated/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

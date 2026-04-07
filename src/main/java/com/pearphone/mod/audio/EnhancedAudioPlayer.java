@@ -46,6 +46,8 @@ public class EnhancedAudioPlayer {
     private volatile SourceDataLine audioLine;
     /** Bytes delivered to the audio line — used to calculate playback position. */
     private final AtomicLong bytesWritten = new AtomicLong(0);
+    /** Seek offset applied at the next play() call (seconds). */
+    private volatile double seekOffsetSeconds = 0;
 
     /** Fallback paths: the player/feeder process. */
     private volatile Process mainProcess;
@@ -77,7 +79,7 @@ public class EnhancedAudioPlayer {
     public void play() {
         cancelled.set(false);
         paused.set(false);
-        bytesWritten.set(0);
+        bytesWritten.set((long)(seekOffsetSeconds * SAMPLE_RATE * BYTES_PER_FRAME));
         EXECUTOR.submit(this::doPlay);
     }
 
@@ -214,6 +216,49 @@ public class EnhancedAudioPlayer {
     }
 
     /**
+     * Set the seek offset for the NEXT {@link #play()} call without restarting.
+     * Used when creating a new player that should start mid-track.
+     */
+    public void setSeekOffset(double seconds) {
+        this.seekOffsetSeconds = Math.max(0, seconds);
+    }
+
+    /**
+     * Seek to {@code seconds} into the track. Stops and restarts the yt-dlp/ffmpeg
+     * pipeline with {@code --download-sections} so playback resumes at the new
+     * position. Only accurate for the Java PCM path; other paths restart from the
+     * given offset but do not update the position indicator.
+     */
+    public void seekTo(double seconds) {
+        this.seekOffsetSeconds = Math.max(0, seconds);
+
+        // Tear down current playback (same as stop, but we restart immediately)
+        cancelled.set(true);
+        paused.set(false);
+        SourceDataLine line = this.audioLine;
+        if (line != null) {
+            try { line.close(); } catch (Exception ignored) {}
+            this.audioLine = null;
+        }
+        killProcess(this.mainProcess);
+        killProcess(this.ytdlpProcess);
+        this.mainProcess  = null;
+        this.ytdlpProcess = null;
+        // Invalidate preloaded processes — they started from offset 0, not the seek point
+        killProcess(this.preloadedFfmpeg);
+        killProcess(this.preloadedYtdlp);
+        this.preloadedFfmpeg = null;
+        this.preloadedYtdlp  = null;
+        preloaded.set(false);
+
+        // Restart from the new position
+        cancelled.set(false);
+        bytesWritten.set((long)(seekOffsetSeconds * SAMPLE_RATE * BYTES_PER_FRAME));
+        EXECUTOR.submit(this::doPlay);
+        LOGGER.info("Seeking to {}s for: {}", (int) seconds, youtubeUrl);
+    }
+
+    /**
      * Callback invoked on the audio thread when a track finishes naturally
      * (not when stopped externally). Used by {@link PlaylistManager} for auto-advance.
      */
@@ -332,7 +377,7 @@ public class EnhancedAudioPlayer {
                 LOGGER.info("[Audio] Consuming preloaded stream for: {}", youtubeUrl);
             } else {
                 // ── Cold start ────────────────────────────────────────────────
-                ytdlp = extractor.startStreamProcess(youtubeUrl);
+                ytdlp = extractor.startStreamProcess(youtubeUrl, seekOffsetSeconds);
                 if (ytdlp == null) return false;
                 this.ytdlpProcess = ytdlp;
                 if (cancelled.get()) { killProcess(ytdlp); return false; }
@@ -444,7 +489,7 @@ public class EnhancedAudioPlayer {
         Process ytdlp = null;
         Process ffplay = null;
         try {
-            ytdlp = extractor.startStreamProcess(youtubeUrl);
+            ytdlp = extractor.startStreamProcess(youtubeUrl, seekOffsetSeconds);
             if (ytdlp == null) return false;
             this.ytdlpProcess = ytdlp;
             if (cancelled.get()) { killProcess(ytdlp); return false; }

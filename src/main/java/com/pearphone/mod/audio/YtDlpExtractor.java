@@ -177,6 +177,17 @@ public class YtDlpExtractor {
      * @return the running Process, or null on failure
      */
     public Process startStreamProcess(String youtubeUrl) {
+        return startStreamProcess(youtubeUrl, 0);
+    }
+
+    /**
+     * Start a yt-dlp process beginning at {@code seekSeconds} into the video.
+     * When {@code seekSeconds > 0}, adds {@code --download-sections *HH:MM:SS-inf}
+     * so yt-dlp skips to that timestamp before piping data.
+     *
+     * @return the running Process, or null on failure
+     */
+    public Process startStreamProcess(String youtubeUrl, double seekSeconds) {
         if (!this.isAvailable) {
             LOGGER.error("yt-dlp unavailable — cannot start stream");
             return null;
@@ -190,10 +201,17 @@ public class YtDlpExtractor {
                 "-o",  "-",           // pipe raw audio bytes to stdout
                 "-q",                 // suppress progress/warnings
                 "--no-playlist",
-                "--no-part",          // no temp .part files (belt-and-suspenders)
-                youtubeUrl
+                "--no-part"           // no temp .part files (belt-and-suspenders)
             ));
-            LOGGER.info("Starting yt-dlp stream: {}", String.join(" ", cmd));
+            if (seekSeconds > 0.5) {
+                int total = (int) seekSeconds;
+                String ts = String.format("*%02d:%02d:%02d-inf", total / 3600, (total % 3600) / 60, total % 60);
+                cmd.addAll(Arrays.asList("--download-sections", ts, "--force-keyframes-at-cuts"));
+                LOGGER.info("Starting yt-dlp stream (seek={}s): {}", total, String.join(" ", cmd));
+            } else {
+                LOGGER.info("Starting yt-dlp stream: {}", String.join(" ", cmd));
+            }
+            cmd.add(youtubeUrl);
             return new ProcessBuilder(cmd).start();
         } catch (Exception e) {
             LOGGER.error("Failed to start yt-dlp stream: {}", e.getMessage(), e);

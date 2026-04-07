@@ -1,17 +1,27 @@
 package com.pearphone.mod.event;
 
 import com.pearphone.mod.PearPhoneMod;
+import com.pearphone.mod.ProximityAudioRegistry;
 import com.pearphone.mod.audio.YtDlpExtractor;
 import com.pearphone.mod.config.AudioPlayerConfig;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @EventBusSubscriber(modid = PearPhoneMod.MODID)
 public class ServerEvents {
     private static final Logger LOGGER = LoggerFactory.getLogger("PortableAudio");
+
+    /** Tick the proximity registry every 2 seconds (40 ticks). */
+    @SubscribeEvent
+    public static void onServerTick(ServerTickEvent.Post event) {
+        if (event.getServer().getTickCount() % 40 == 0) {
+            ProximityAudioRegistry.tick(event.getServer());
+        }
+    }
 
     @SubscribeEvent
     public static void onServerStarting(ServerStartingEvent event) {

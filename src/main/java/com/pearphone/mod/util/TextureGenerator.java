@@ -133,16 +133,74 @@ public class TextureGenerator {
         }
     }
     
+    /**
+     * Generate the mod logo (64x64) used as the mod icon in launchers.
+     * Output: src/main/resources/pearphone.png (referenced by neoforge.mods.toml logoFile)
+     */
+    public static void generateLogo(String outputPath) {
+        int size = 64;
+        BufferedImage image = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2d = image.createGraphics();
+        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+        // Background circle
+        g2d.setColor(new Color(30, 30, 35));
+        g2d.fillOval(2, 2, size - 4, size - 4);
+
+        // Outer ring
+        g2d.setColor(new Color(100, 150, 255));
+        g2d.setStroke(new BasicStroke(2.5f));
+        g2d.drawOval(2, 2, size - 4, size - 4);
+
+        // Phone body
+        g2d.setColor(new Color(200, 200, 210));
+        g2d.fillRoundRect(18, 12, 28, 40, 5, 5);
+
+        // Phone border
+        g2d.setColor(new Color(120, 120, 130));
+        g2d.setStroke(new BasicStroke(1.5f));
+        g2d.drawRoundRect(18, 12, 28, 40, 5, 5);
+
+        // Screen
+        g2d.setColor(new Color(20, 25, 40));
+        g2d.fillRect(21, 16, 22, 28);
+
+        // Music note (two eighth notes with beam)
+        g2d.setColor(new Color(100, 180, 255));
+        g2d.setStroke(new BasicStroke(2.0f));
+        g2d.drawLine(26, 22, 26, 30);
+        g2d.fillOval(23, 29, 5, 4);
+        g2d.drawLine(32, 20, 32, 28);
+        g2d.fillOval(29, 27, 5, 4);
+        g2d.drawLine(26, 22, 32, 20);
+
+        // Home button
+        g2d.setColor(new Color(150, 150, 160));
+        g2d.fillOval(28, 47, 8, 5);
+
+        g2d.dispose();
+
+        try {
+            File outputFile = new File(outputPath);
+            outputFile.getParentFile().mkdirs();
+            ImageIO.write(image, "PNG", outputFile);
+            System.out.println("Generated logo: " + outputPath);
+        } catch (IOException e) {
+            System.err.println("Failed to generate logo: " + e.getMessage());
+        }
+    }
+
     public static void main(String[] args) {
-        // Create texture directories
         String blockTexturePath = "src/main/resources/assets/pearphone/textures/block/audio_player.png";
         String itemTexturePath = "src/main/resources/assets/pearphone/textures/item/pearphone.png";
         String guiTexturePath = "src/main/resources/assets/pearphone/textures/gui/audio_player_gui.png";
-        
+        String logoPath = "src/main/resources/pearphone.png";
+
         generateAudioPlayerBlockTexture(blockTexturePath);
         generatePearPhoneTexture(itemTexturePath);
         generateGuiTexture(guiTexturePath);
-        
+        generateLogo(logoPath);
+
         System.out.println("All textures generated successfully!");
     }
 }

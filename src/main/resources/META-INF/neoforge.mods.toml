@@ -6,11 +6,14 @@ issueTrackerURL="https://github.com/lck3000/PearPhoneMod/issues"
 [[mods]]
     modId="pearphone"
     version="${file.jarVersion}"
-    displayName="PearPhone Mod"
+    displayName="PearPhone"
+    logoFile="pearphone.png"
     displayURL="https://github.com/lck3000/PearPhoneMod"
     authors="lck3000"
     description='''
-Adds an audio player block that streams YouTube audio to nearby players with proximity-based sound.
+A phone mod that adds apps such as an audio player, camera, and more.
+Stream YouTube audio to nearby players via proximity-based sound distribution.
+Powered by yt-dlp.
 '''
 
 [[dependencies.pearphone]]

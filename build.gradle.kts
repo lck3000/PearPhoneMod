@@ -21,7 +21,7 @@ version = modVersion
 group = "com.pearphone.mod"
 
 base {
-    archivesName = modId
+    archivesName = "$modId-$minecraftVersion-neoforge"
 }
 
 java {

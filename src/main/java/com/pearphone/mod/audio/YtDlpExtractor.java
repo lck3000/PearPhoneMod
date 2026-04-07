@@ -184,10 +184,13 @@ public class YtDlpExtractor {
         try {
             List<String> cmd = new ArrayList<>(this.cmdPrefix);
             cmd.addAll(Arrays.asList(
-                "-f",  "bestaudio",
-                "-o",  "-",          // write audio bytes to stdout
-                "-q",                // quiet (no progress spam)
+                // 251 = WebM/Opus, 140 = M4A/AAC — both stream progressively without
+                // remuxing, which eliminates the buffer-before-output delay.
+                "-f",  "251/140/bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio",
+                "-o",  "-",           // pipe raw audio bytes to stdout
+                "-q",                 // suppress progress/warnings
                 "--no-playlist",
+                "--no-part",          // no temp .part files (belt-and-suspenders)
                 youtubeUrl
             ));
             LOGGER.info("Starting yt-dlp stream: {}", String.join(" ", cmd));

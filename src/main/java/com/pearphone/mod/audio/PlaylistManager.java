@@ -1,10 +1,12 @@
 package com.pearphone.mod.audio;
 
+import com.pearphone.mod.config.AudioPlayerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -25,6 +27,14 @@ public class PlaylistManager {
     private volatile EnhancedAudioPlayer player;
     private volatile int volume = 100;
 
+    /**
+     * Pre-started players keyed by playlist index.  Each entry has already launched
+     * yt-dlp + ffmpeg so their pipe buffers fill while the current track plays,
+     * eliminating the URL-resolution delay on the next track transition.
+     */
+    private final ConcurrentHashMap<Integer, EnhancedAudioPlayer> preloadedPlayers =
+            new ConcurrentHashMap<>();
+
     /** Fetches metadata for newly added tracks without blocking the caller. */
     private final ExecutorService metadataPool = Executors.newFixedThreadPool(2, r -> {
         Thread t = new Thread(r, "MetadataFetch");
@@ -43,10 +53,14 @@ public class PlaylistManager {
         TrackInfo info = new TrackInfo(url);
         tracks.add(info);
         metadataPool.submit(() -> fetchMetadata(info));
+        // The new track might fall within the preload window of the current track.
+        if (currentIndex >= 0) schedulePreloads(currentIndex);
     }
 
     public void removeTrack(int index) {
         if (index < 0 || index >= tracks.size()) return;
+        // Cancel all preloads; they will be rescheduled with correct indices after removal.
+        cancelAllPreloads();
         if (index == currentIndex) {
             stopPlayer();
             currentIndex = -1;
@@ -54,9 +68,11 @@ public class PlaylistManager {
             currentIndex--;
         }
         tracks.remove(index);
+        if (currentIndex >= 0) schedulePreloads(currentIndex);
     }
 
     public void clearAll() {
+        cancelAllPreloads();
         stopPlayer();
         currentIndex = -1;
         tracks.clear();
@@ -69,11 +85,22 @@ public class PlaylistManager {
         if (index < 0 || index >= tracks.size()) return;
         stopPlayer();
         currentIndex = index;
-        EnhancedAudioPlayer p = new EnhancedAudioPlayer(tracks.get(index).getUrl(), volume);
+
+        // Reuse a preloaded player if one exists for this index — its yt-dlp + ffmpeg
+        // processes are already running so the audio line opens with no URL-resolution delay.
+        EnhancedAudioPlayer p = preloadedPlayers.remove(index);
+        if (p != null) {
+            p.setVolume(volume); // volume may have changed since preload was started
+            LOGGER.info("Playlist: playing index {} from preload — {}", index, tracks.get(index).getTitle());
+        } else {
+            p = new EnhancedAudioPlayer(tracks.get(index).getUrl(), volume);
+            LOGGER.info("Playlist: playing index {} (cold start) — {}", index, tracks.get(index).getTitle());
+        }
         p.setOnComplete(this::onTrackComplete);
         player = p;
         p.play();
-        LOGGER.info("Playlist: playing index {} — {}", index, tracks.get(index).getTitle());
+
+        schedulePreloads(index);
     }
 
     /** Start or resume. If paused → resume. If stopped → play current (or first) track. */
@@ -145,6 +172,7 @@ public class PlaylistManager {
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     public void shutdown() {
+        cancelAllPreloads();
         stopPlayer();
         metadataPool.shutdownNow();
     }
@@ -167,7 +195,49 @@ public class PlaylistManager {
         } else {
             currentIndex = -1;
             player = null;
+            cancelAllPreloads();
         }
+    }
+
+    // ── Preload management ────────────────────────────────────────────────────
+
+    /**
+     * Ensure the next {@code preloadCount} tracks after {@code fromIndex} have
+     * a pre-started {@link EnhancedAudioPlayer}.  Cancels any preloads that are
+     * now outside the window.
+     */
+    private void schedulePreloads(int fromIndex) {
+        int count = preloadCount();
+        if (count == 0) return;
+
+        // Cancel preloads that fell outside the window.
+        preloadedPlayers.entrySet().removeIf(entry -> {
+            int idx = entry.getKey();
+            boolean outOfWindow = idx <= fromIndex || idx > fromIndex + count;
+            if (outOfWindow) entry.getValue().stop();
+            return outOfWindow;
+        });
+
+        // Start preloads for tracks in the window that aren't already preloading.
+        for (int i = 1; i <= count; i++) {
+            int idx = fromIndex + i;
+            if (idx < tracks.size() && !preloadedPlayers.containsKey(idx)) {
+                EnhancedAudioPlayer p = new EnhancedAudioPlayer(tracks.get(idx).getUrl(), volume);
+                preloadedPlayers.put(idx, p);
+                p.preload();
+                LOGGER.info("[Preload] Scheduled index {} — {}", idx, tracks.get(idx).getTitle());
+            }
+        }
+    }
+
+    private void cancelAllPreloads() {
+        preloadedPlayers.values().forEach(EnhancedAudioPlayer::stop);
+        preloadedPlayers.clear();
+    }
+
+    private static int preloadCount() {
+        try { return AudioPlayerConfig.COMMON.preloadCount.get(); }
+        catch (Exception e) { return 2; }
     }
 
     private void fetchMetadata(TrackInfo info) {

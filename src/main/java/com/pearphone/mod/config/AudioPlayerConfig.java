@@ -11,6 +11,7 @@ public class AudioPlayerConfig {
         public final ModConfigSpec.BooleanValue enableProximitySound;
         public final ModConfigSpec.BooleanValue enableYoutubeSupport;
         public final ModConfigSpec.DoubleValue volumeDecayFactor;
+        public final ModConfigSpec.IntValue preloadCount;
 
         Common(ModConfigSpec.Builder builder) {
             builder.comment("Audio Player Configuration")
@@ -39,6 +40,10 @@ public class AudioPlayerConfig {
             volumeDecayFactor = builder
                     .comment("Volume decay factor per block distance (0.0-1.0, where 1.0 = no decay)")
                     .defineInRange("volumeDecayFactor", 0.95, 0.0, 1.0);
+
+            preloadCount = builder
+                    .comment("Number of upcoming playlist tracks to preload for gapless transitions (0 = disabled, max 5)")
+                    .defineInRange("preloadCount", 2, 0, 5);
 
             builder.pop();
         }

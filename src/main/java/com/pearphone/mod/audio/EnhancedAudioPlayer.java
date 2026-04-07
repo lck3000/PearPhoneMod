@@ -51,6 +51,17 @@ public class EnhancedAudioPlayer {
     private volatile Process mainProcess;
     private volatile Process ytdlpProcess;
 
+    /**
+     * Preload state: yt-dlp and ffmpeg started early so their pipe buffers fill
+     * while the previous track plays.  When play() is called, tryJavaPcmStream()
+     * consumes these instead of spawning new processes, eliminating the URL-
+     * resolution delay.
+     */
+    private volatile Process preloadedYtdlp;
+    private volatile Process preloadedFfmpeg;
+    private final AtomicBoolean preloaded     = new AtomicBoolean(false);
+    private final AtomicBoolean preloadFailed = new AtomicBoolean(false);
+
     private volatile String statusMessage = "Idle";
 
     private final YtDlpExtractor extractor;
@@ -70,6 +81,80 @@ public class EnhancedAudioPlayer {
         EXECUTOR.submit(this::doPlay);
     }
 
+    /**
+     * Start the yt-dlp → ffmpeg pipeline in the background without opening an audio
+     * line.  Their stdout/stdin pipe buffers fill while another track plays.  When
+     * {@link #play()} is subsequently called, {@link #tryJavaPcmStream()} detects the
+     * ready processes and skips URL resolution entirely, eliminating startup latency.
+     *
+     * <p>Safe to call from any thread.  Idempotent — a second call is a no-op.
+     * If yt-dlp or ffmpeg are unavailable the flag {@code preloadFailed} is set so
+     * {@link #tryJavaPcmStream()} falls back to a cold start.
+     */
+    public void preload() {
+        if (preloaded.get() || preloadFailed.get()) return;
+        EXECUTOR.submit(() -> {
+            try {
+                if (cancelled.get()) return;
+                if (!AudioPlayerConfig.COMMON.enableYoutubeSupport.get()) return;
+                if (!extractor.isAvailable()) return;
+
+                Process ytdlp = extractor.startStreamProcess(youtubeUrl);
+                if (ytdlp == null) { preloadFailed.set(true); return; }
+                if (cancelled.get()) { killProcess(ytdlp); return; }
+
+                Process ffmpeg;
+                try {
+                    ffmpeg = new ProcessBuilder(
+                            "ffmpeg", "-hide_banner", "-loglevel", "error",
+                            "-i", "pipe:0",
+                            "-f", "s16le", "-ar", String.valueOf(SAMPLE_RATE), "-ac", String.valueOf(CHANNELS),
+                            "pipe:1").start();
+                } catch (IOException e) {
+                    // ffmpeg unavailable — preload only works on the Java PCM path
+                    killProcess(ytdlp);
+                    preloadFailed.set(true);
+                    LOGGER.debug("[Preload] ffmpeg not found, skipping preload for {}", youtubeUrl);
+                    return;
+                }
+                if (cancelled.get()) { killProcess(ffmpeg); killProcess(ytdlp); return; }
+
+                // Pipe yt-dlp → ffmpeg and drain stderr; both run as daemon threads.
+                final Process ytRef = ytdlp, ffRef = ffmpeg;
+                Thread feeder = new Thread(() -> {
+                    try (OutputStream ffIn = ffRef.getOutputStream()) {
+                        ytRef.getInputStream().transferTo(ffIn);
+                    } catch (Exception ignored) {}
+                }, "AudioPreloadFeeder");
+                feeder.setDaemon(true);
+                feeder.start();
+
+                new Thread(() -> {
+                    try { ffRef.getErrorStream().transferTo(OutputStream.nullOutputStream()); }
+                    catch (Exception ignored) {}
+                }, "AudioPreloadErrDrain").start();
+
+                this.preloadedYtdlp = ytdlp;
+                this.preloadedFfmpeg = ffmpeg;
+                preloaded.set(true);
+
+                // Handle the race where stop() was called while we were setting up.
+                if (cancelled.get()) {
+                    killProcess(preloadedFfmpeg);
+                    killProcess(preloadedYtdlp);
+                    preloadedFfmpeg = null;
+                    preloadedYtdlp  = null;
+                    preloaded.set(false);
+                } else {
+                    LOGGER.info("[Preload] Ready: {}", youtubeUrl);
+                }
+            } catch (Exception e) {
+                preloadFailed.set(true);
+                LOGGER.warn("[Preload] Failed for {}: {}", youtubeUrl, e.getMessage());
+            }
+        });
+    }
+
     public void stop() {
         cancelled.set(true);
         paused.set(false);
@@ -81,8 +166,16 @@ public class EnhancedAudioPlayer {
         }
         killProcess(this.mainProcess);
         killProcess(this.ytdlpProcess);
-        this.mainProcess   = null;
-        this.ytdlpProcess  = null;
+        this.mainProcess  = null;
+        this.ytdlpProcess = null;
+
+        // Also tear down any in-flight preload.
+        killProcess(this.preloadedFfmpeg);
+        killProcess(this.preloadedYtdlp);
+        this.preloadedFfmpeg = null;
+        this.preloadedYtdlp  = null;
+        preloaded.set(false);
+
         this.statusMessage = "Idle";
         LOGGER.info("Playback stopped");
     }
@@ -135,7 +228,7 @@ public class EnhancedAudioPlayer {
     }
 
     public boolean isPaused() {
-        return paused.get() && !cancelled.get() && this.audioLine != null;
+        return paused.get() && !cancelled.get();
     }
 
     /** Elapsed playback time in seconds (Java audio path only; 0 for fallback paths). */
@@ -216,49 +309,64 @@ public class EnhancedAudioPlayer {
     /**
      * yt-dlp → ffmpeg (s16le PCM) → Java SourceDataLine.
      * Supports real-time volume (FloatControl), pause/resume, and position tracking.
+     *
+     * <p>If {@link #preload()} completed successfully the already-running yt-dlp and
+     * ffmpeg processes are reused, skipping the YouTube URL-resolution delay entirely.
      */
     private boolean tryJavaPcmStream() {
-        Process ytdlp = null;
+        Process ytdlp  = null;
         Process ffmpeg = null;
         SourceDataLine line = null;
+
+        // Reuse preloaded processes if they are alive; otherwise cold-start.
+        boolean fromPreload = preloaded.get()
+                && preloadedFfmpeg != null && preloadedFfmpeg.isAlive()
+                && preloadedYtdlp  != null && preloadedYtdlp.isAlive();
+
         try {
-            ytdlp = extractor.startStreamProcess(youtubeUrl);
-            if (ytdlp == null) return false;
-            this.ytdlpProcess = ytdlp;
-            if (cancelled.get()) { killProcess(ytdlp); return false; }
+            if (fromPreload) {
+                ytdlp  = this.preloadedYtdlp;
+                ffmpeg = this.preloadedFfmpeg;
+                this.ytdlpProcess = ytdlp;
+                this.mainProcess  = ffmpeg;
+                LOGGER.info("[Audio] Consuming preloaded stream for: {}", youtubeUrl);
+            } else {
+                // ── Cold start ────────────────────────────────────────────────
+                ytdlp = extractor.startStreamProcess(youtubeUrl);
+                if (ytdlp == null) return false;
+                this.ytdlpProcess = ytdlp;
+                if (cancelled.get()) { killProcess(ytdlp); return false; }
 
-            ProcessBuilder ffpb = new ProcessBuilder(
-                    "ffmpeg", "-hide_banner", "-loglevel", "error",
-                    "-i", "pipe:0",
-                    "-f", "s16le", "-ar", String.valueOf(SAMPLE_RATE), "-ac", String.valueOf(CHANNELS),
-                    "pipe:1");
-            ffmpeg = ffpb.start();
-            this.mainProcess = ffmpeg;
-            if (cancelled.get()) { killProcess(ffmpeg); killProcess(ytdlp); return false; }
+                ProcessBuilder ffpb = new ProcessBuilder(
+                        "ffmpeg", "-hide_banner", "-loglevel", "error",
+                        "-i", "pipe:0",
+                        "-f", "s16le", "-ar", String.valueOf(SAMPLE_RATE), "-ac", String.valueOf(CHANNELS),
+                        "pipe:1");
+                ffmpeg = ffpb.start();
+                this.mainProcess = ffmpeg;
+                if (cancelled.get()) { killProcess(ffmpeg); killProcess(ytdlp); return false; }
 
-            final Process ytRef = ytdlp;
-            final Process ffRef = ffmpeg;
+                final Process ytRef = ytdlp, ffRef = ffmpeg;
+                Thread feeder = new Thread(() -> {
+                    try (OutputStream ffIn = ffRef.getOutputStream()) {
+                        ytRef.getInputStream().transferTo(ffIn);
+                    } catch (Exception ignored) {}
+                }, "AudioFeeder");
+                feeder.setDaemon(true);
+                feeder.start();
 
-            Thread feeder = new Thread(() -> {
-                try (OutputStream ffIn = ffRef.getOutputStream()) {
-                    ytRef.getInputStream().transferTo(ffIn);
-                } catch (Exception ignored) {}
-            }, "AudioFeeder");
-            feeder.setDaemon(true);
-            feeder.start();
+                new Thread(() -> {
+                    try { ffRef.getErrorStream().transferTo(OutputStream.nullOutputStream()); }
+                    catch (Exception ignored) {}
+                }, "AudioErrDrain").start();
+            }
 
-            Thread errDrain = new Thread(() -> {
-                try { ffRef.getErrorStream().transferTo(OutputStream.nullOutputStream()); }
-                catch (Exception ignored) {}
-            }, "AudioErrDrain");
-            errDrain.setDaemon(true);
-            errDrain.start();
-
+            // ── Open audio line ───────────────────────────────────────────────
             AudioFormat format = new AudioFormat(SAMPLE_RATE, 16, CHANNELS, true, false);
             DataLine.Info info = new DataLine.Info(SourceDataLine.class, format);
             if (!AudioSystem.isLineSupported(info)) {
                 LOGGER.warn("Java SourceDataLine not supported; trying ffplay.");
-                killProcess(ffmpeg); killProcess(ytdlp);
+                cleanupProcesses(fromPreload, ffmpeg, ytdlp);
                 return false;
             }
             line = (SourceDataLine) AudioSystem.getLine(info);
@@ -268,16 +376,28 @@ public class EnhancedAudioPlayer {
             line.start();
 
             setStatus("Playing");
-            LOGGER.info("Streaming via yt-dlp → ffmpeg → Java audio");
+            LOGGER.info("Streaming via {}yt-dlp → ffmpeg → Java audio",
+                    fromPreload ? "[preloaded] " : "");
 
+            // ── Read loop ─────────────────────────────────────────────────────
             InputStream pcm = ffmpeg.getInputStream();
             byte[] buf = new byte[8192];
             int n;
             while (!cancelled.get()) {
+                // While paused: hold here without reading more PCM so the line buffer
+                // stays at its current fill level and bytesWritten does not advance.
+                while (paused.get() && !cancelled.get()) {
+                    try { Thread.sleep(20); } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+                if (cancelled.get()) break;
+
                 n = pcm.read(buf);
                 if (n == -1) break;
                 try {
-                    line.write(buf, 0, n);  // blocks when paused (line stopped + buffer full)
+                    line.write(buf, 0, n);
                     bytesWritten.addAndGet(n);
                 } catch (Exception e) {
                     break; // line closed by stop()
@@ -296,14 +416,27 @@ public class EnhancedAudioPlayer {
 
         } catch (IOException e) {
             LOGGER.warn("ffmpeg not available ({}); trying ffplay.", e.getMessage());
-            closeLine(line); this.audioLine = null;
-            killProcess(ffmpeg); killProcess(ytdlp);
+            closeLine(line);
+            this.audioLine = null;
+            cleanupProcesses(fromPreload, ffmpeg, ytdlp);
             return false;
         } catch (Exception e) {
             if (!cancelled.get()) LOGGER.error("Java PCM stream error: {}", e.getMessage(), e);
-            closeLine(line); this.audioLine = null;
-            killProcess(ffmpeg); killProcess(ytdlp);
+            closeLine(line);
+            this.audioLine = null;
+            cleanupProcesses(fromPreload, ffmpeg, ytdlp);
             return false;
+        }
+    }
+
+    /**
+     * Kill processes only when they were cold-started by this method.
+     * Preloaded processes are owned by the preload system and cleaned up via {@link #stop()}.
+     */
+    private void cleanupProcesses(boolean fromPreload, Process ffmpeg, Process ytdlp) {
+        if (!fromPreload) {
+            killProcess(ffmpeg);
+            killProcess(ytdlp);
         }
     }
 

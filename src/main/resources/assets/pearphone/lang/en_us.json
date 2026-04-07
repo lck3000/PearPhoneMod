@@ -1,7 +1,7 @@
 {
-  "block.pearphone.audio_player_block": "Audio Player",
+  "block.pearphone.audio_player_block": "PearPhone",
   "item.pearphone.pearphone": "PearPhone",
-  "container.pearphone.audio_player": "Audio Player Controls",
+  "container.pearphone.audio_player": "PearPhone",
   "gui.pearphone.youtube_url": "YouTube URL:",
   "gui.pearphone.play": "Play",
   "gui.pearphone.stop": "Stop",

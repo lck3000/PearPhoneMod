@@ -33,7 +33,7 @@ public class ClientEventHandlers {
     @SubscribeEvent
     public static void onLevelUnload(LevelEvent.Unload event) {
         if (event.getLevel().isClientSide()) {
-            AudioPlayerScreen.shutdownStandalonePlaylist();
+            PearPhoneScreen.shutdownStandalonePlaylist();
             stopAllProximityPlayers();
         }
     }

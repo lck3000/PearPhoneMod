@@ -12,6 +12,6 @@ public class ClientSetup {
 
     @SubscribeEvent
     public static void onRegisterScreens(RegisterMenuScreensEvent event) {
-        event.register(ModMenuTypes.AUDIO_PLAYER_MENU.get(), AudioPlayerScreen::new);
+        event.register(ModMenuTypes.AUDIO_PLAYER_MENU.get(), PearPhoneScreen::new);
     }
 }

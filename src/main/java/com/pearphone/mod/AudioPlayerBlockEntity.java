@@ -79,7 +79,7 @@ public class AudioPlayerBlockEntity extends BlockEntity implements net.minecraft
 
     @Override
     public Component getDisplayName() {
-        return Component.literal("Portable Audio Player");
+        return Component.literal("PearPhone");
     }
 
     @Override

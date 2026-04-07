@@ -10,9 +10,7 @@ import com.google.gson.JsonParser;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -36,6 +34,24 @@ public class YtDlpExtractor {
     };
 
     private static YtDlpExtractor INSTANCE = null;
+
+    /**
+     * LRU cache of resolved CDN audio URLs keyed by YouTube URL.
+     * Avoids re-running yt-dlp for recently played or preloaded tracks.
+     */
+    private static final Map<String, String> URL_CACHE = Collections.synchronizedMap(
+        new LinkedHashMap<>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+                return size() > urlCacheMaxSize();
+            }
+        }
+    );
+
+    private static int urlCacheMaxSize() {
+        try { return AudioPlayerConfig.COMMON.streamUrlCacheSize.get(); }
+        catch (Exception e) { return 10; }
+    }
 
     private boolean isAvailable = false;
     /** The working command prefix, e.g. ["yt-dlp"] or ["python", "-m", "yt_dlp"]. */
@@ -166,6 +182,29 @@ public class YtDlpExtractor {
 
     public String extractM4aStreamUrl(String youtubeUrl) {
         return extractAudioStreamUrl(youtubeUrl, "140/139/bestaudio[ext=m4a]");
+    }
+
+    /**
+     * Extract the best audio CDN URL, using the LRU cache when possible.
+     * Thread-safe. Cache size is controlled by {@code streamUrlCacheSize} in config.
+     */
+    public String extractStreamUrlCached(String youtubeUrl) {
+        String cached = URL_CACHE.get(youtubeUrl);
+        if (cached != null) {
+            LOGGER.debug("[URLCache] Hit for: {}", youtubeUrl);
+            return cached;
+        }
+        String url = extractAudioStreamUrl(youtubeUrl);
+        if (url != null) {
+            URL_CACHE.put(youtubeUrl, url);
+            LOGGER.info("[URLCache] Cached URL ({} entries)", URL_CACHE.size());
+        }
+        return url;
+    }
+
+    /** Remove a cached URL (call when playback fails so the next attempt re-extracts). */
+    public void invalidateCachedUrl(String youtubeUrl) {
+        URL_CACHE.remove(youtubeUrl);
     }
 
     // ── Streaming process (yt-dlp pipes audio bytes directly) ────────────────

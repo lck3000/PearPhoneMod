@@ -247,6 +247,6 @@ For issues, questions, or contributions:
 ---
 
 **Mod ID**: `pearphone`  
-**Version**: 1.0.0  
+**Version**: 0.1.0  
 **Minecraft Version**: 1.21.1  
 **Modloader**: NeoForge

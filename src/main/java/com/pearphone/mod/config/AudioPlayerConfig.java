@@ -12,6 +12,7 @@ public class AudioPlayerConfig {
         public final ModConfigSpec.BooleanValue enableYoutubeSupport;
         public final ModConfigSpec.DoubleValue volumeDecayFactor;
         public final ModConfigSpec.IntValue preloadCount;
+        public final ModConfigSpec.IntValue streamUrlCacheSize;
 
         Common(ModConfigSpec.Builder builder) {
             builder.comment("Audio Player Configuration")
@@ -42,8 +43,12 @@ public class AudioPlayerConfig {
                     .defineInRange("volumeDecayFactor", 0.95, 0.0, 1.0);
 
             preloadCount = builder
-                    .comment("Number of upcoming playlist tracks to preload for gapless transitions (0 = disabled, max 5)")
-                    .defineInRange("preloadCount", 2, 0, 5);
+                    .comment("Number of upcoming playlist tracks to preload for instant transitions (0 = disabled, max 10)")
+                    .defineInRange("preloadCount", 3, 0, 10);
+
+            streamUrlCacheSize = builder
+                    .comment("Number of resolved CDN stream URLs to keep cached (avoids re-running yt-dlp for recently played tracks, 0 = disabled)")
+                    .defineInRange("streamUrlCacheSize", 10, 0, 50);
 
             builder.pop();
         }
